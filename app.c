@@ -1,3 +1,13 @@
+// TODO ==================================
+/*
+	1. MORE REFACTORING
+	2. FINISH MOVEMENT
+	3. LOAD MAP
+	4. ADD COLLISION
+	5. WORK WITH CAMERA
+*/ 
+// =======================================
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -5,6 +15,21 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
+#define FPS 165
+
+typedef struct {
+	SDL_Texture *texture;				// Driver-specific representation of pixel data
+	SDL_Rect src_rect;					// To load texture and display animation
+	SDL_Rect dest_rect;					// To scale and change position
+	float speed;						// Actor speed
+	int frame_widht, texture_width;		// Texture width/height is used to store width/height of the original sprite image with animation
+	int frame_height, texture_height;	// Frame width/height is used to store widht/height of one single sprite in the texture image
+} actor_t;
+
+typedef struct {
+	actor_t **actors;
+	int actor_count;
+} game_t;
 
 // Application state
 typedef enum {
@@ -15,11 +40,21 @@ typedef enum {
 
 // Application type struct
 typedef struct {
+	// Configuration
 	app_state_t state;
-	SDL_Window *window;			// The opaque type used to identify a window
-	SDL_Renderer *renderer;		// A structure representing rendering state
-	SDL_Surface *surface;		// A collection of pixels used in software blitting
-	SDL_Texture *texture;		// Driver-specific representation of pixel data
+	SDL_Window *window;				// The opaque type used to identify a window
+	SDL_Renderer *renderer;			// A structure representing rendering state
+	actor_t actor;
+
+	// Game state
+	game_t game;
+
+	// Timers/Controls
+	float frame_time;
+	int prev_time;
+	int current_time;
+	float delta_time;
+	const uint8_t *key_state;
 } app_t;
 
 // Configuration of Application
@@ -53,6 +88,10 @@ bool init_app(app_t *app, const config_t config) {
 
 	// If everything is OK set state to RUNNING
 	app->state = RUNNING;
+	app->frame_time = 0;
+	app->prev_time = 0;
+	app->current_time = 0;
+	app->delta_time = 0;
 
 	return true;
 }
@@ -65,7 +104,7 @@ bool set_config(config_t *config, int argc, char *argv[]) {
 		.window_width 	= 1920,
 		.window_height 	= 1080,
 		.flags 			= 0,
-		.renderer_flags = SDL_RENDERER_ACCELERATED,
+		.renderer_flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC,
 	};
 
 	// Override defaults
@@ -75,29 +114,51 @@ bool set_config(config_t *config, int argc, char *argv[]) {
 	return true;
 }
 
+#ifdef DEBUG
+bool load_image(app_t *app, const config_t config, const char *img_file) {
 
-bool load_image(app_t *app, const char *img_file) {
 	// Load image from path
-	app->surface = IMG_Load(img_file);
-	if (!app->surface) {
-		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load image file: %s\n", SDL_GetError());
+	app->actor.texture = IMG_LoadTexture(app->renderer, img_file);
+	if (!app->actor.texture) {
+		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load texture into graphics hardware memory: %s\n", SDL_GetError());
 		return false;
 	}
 
 	// Load image into graphics hardware memory
-	app->texture = SDL_CreateTextureFromSurface(app->renderer, app->surface);
-	if (!app->texture) {
-		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load image into graphics hardware memory: %s\n", SDL_GetError());
-		return false;
-	}
+	// app->actor.texture = SDL_CreateTextureFromSurface(app->renderer, app->actor.surface);
+	// if (!app->actor.texture) {
+	// 	SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load image into graphics hardware memory: %s\n", SDL_GetError());
+	// 	return false;
+	// }
 
 	// Clears main memory
-	SDL_FreeSurface(app->surface);
+	// SDL_FreeSurface(app->actor.surface);
+
+	// 
+	SDL_QueryTexture(app->actor.texture, NULL, NULL, &app->actor.texture_width, &app->actor.texture_height);
+
+	app->actor.frame_widht = app->actor.texture_width / 4;
+	app->actor.frame_height = app->actor.texture_height / 13;
+
+	// app->actor.rect.w /= 2;
+	// app->actor.rect.h /= 2;
+	app->actor.rect.w = app->actor.frame_widht;
+	app->actor.rect.h = app->actor.frame_height;
+
+	// app->actor.rect.x = (config.window_width - app->actor.rect.w) / 2;
+	// app->actor.rect.y = (config.window_height - app->actor.rect.h) / 2;
+	(void)config; // ==========================================================
+
+	app->actor.rect.x = 0;
+	app->actor.rect.y = 0;
+
+	app->actor.speed = 300.0f;
 
 	return true;
 }
+#endif
 
-void handle_input(app_t *app) {
+void handle_input(app_t *app, SDL_Rect *dest_rect, const float delta_time) {
 	SDL_Event event;
 
 	while(SDL_PollEvent(&event)) {
@@ -123,15 +184,60 @@ void handle_input(app_t *app) {
 				}
 				return;
 
+			case SDLK_w:
+			case SDLK_UP:
+				dest_rect->y -= app->actor.speed * delta_time;
+				// Upper boundary
+				if (dest_rect->y < 0) {
+					dest_rect->y = 0;
+			 		break;
+				}
+				break;
+
+			case SDLK_s:
+			case SDLK_DOWN:
+				dest_rect->y += app->actor.speed * delta_time;
+			    // Bottom boundary
+				if (dest_rect->y + dest_rect->h > 1080) {
+					dest_rect->y = 1080 - dest_rect->h;
+					break;
+				}
+				break;
+
+			case SDLK_a:
+			case SDLK_LEFT:
+				dest_rect->x -= app->actor.speed * delta_time;
+				// Left boundary
+			    if (dest_rect->x < 0) {
+			    	dest_rect->x = 0;
+			    	break;
+			    }
+				break;
+
+			case SDLK_d:
+			case SDLK_RIGHT:
+                dest_rect->x += app->actor.speed * delta_time;
+    			// Right boundary
+                if (dest_rect->x + dest_rect->w > 1920) {
+                    dest_rect->x = 1920 - dest_rect->w;  
+                    break;
+                }
+				break;
+
 			default:
 				break;
 			}
+
 			break;
 
 		default:
 			break;
 		}
 	}
+}
+
+void handle_continuous_input(void) {
+	return;
 }
 
 
@@ -148,6 +254,7 @@ void cleanup(app_t *app) {
 
 int main(int argc, char *argv[]) {
 
+
 	// Set app configuration
 	config_t config = {0};
 	if (!set_config(&config, argc, argv)) exit(EXIT_FAILURE);
@@ -156,33 +263,68 @@ int main(int argc, char *argv[]) {
 	app_t app = {0};
 	if (!init_app(&app, config)) exit(EXIT_FAILURE);
 
-	if (!load_image(&app, "character.png")) exit(EXIT_FAILURE);
+	// if (!load_image(&app, config, "player/CAT_ORANGE.png")) exit(EXIT_FAILURE);
 
-	// Control image position ======================
-	SDL_Rect dest;
-	SDL_QueryTexture(app.texture, NULL, NULL, &dest.w, &dest.h);
 
-	dest.w /= 6;
-	dest.h /= 6;
+	app.actor.texture = IMG_LoadTexture(app.renderer, "player/CAT_GRAY.png");
+	if (!app.actor.texture) {
+		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load texture into graphics hardware memory: %s\n", SDL_GetError());
+		exit(EXIT_FAILURE);
+	}
 
-	dest.x = (1920 - dest.w) / 2;
-	dest.y = (1080 - dest.h) / 2;
-	// =============================================
+	SDL_QueryTexture(app.actor.texture, NULL, NULL, &app.actor.texture_width, &app.actor.texture_height);
+
+	app.actor.frame_widht = app.actor.texture_width / 4;
+	app.actor.frame_height = app.actor.texture_height / 13;
+	
+
+	// For Animation
+	app.actor.src_rect.x = app.actor.src_rect.y = 0;
+	app.actor.src_rect.w = app.actor.frame_widht;
+	app.actor.src_rect.h = app.actor.frame_height;
+
+	// Size + position
+	// SDL_Rect dest_rect;
+	app.actor.dest_rect.w = app.actor.frame_widht * 5;
+	app.actor.dest_rect.h = app.actor.frame_height * 5;
+	app.actor.dest_rect.x = (config.window_width - app.actor.dest_rect.w) / 2;
+	app.actor.dest_rect.y = (config.window_height - app.actor.dest_rect.h) / 2;
+	app.actor.speed = 500.0f;
 
 	// Game Loop
 	while (app.state != QUIT) {
+
+		app.prev_time = app.current_time;
+		app.current_time = SDL_GetTicks();
+		app.delta_time = (app.current_time - app.prev_time) / 1000.0f;  // Miliseconds passed
+		
 		// Handle input
-		handle_input(&app);
+		handle_input(&app, &app.actor.dest_rect, app.delta_time);
 
-		// Clear the screen
-		SDL_RenderClear(app.renderer);
-		SDL_RenderCopy(app.renderer, app.texture, NULL, &dest);
+		if (app.state == PAUSED) continue;
 
-		// Triggers the double buffers for multiple rendering
-		SDL_RenderPresent(app.renderer);
+		app.key_state = SDL_GetKeyboardState(NULL);
+		if (app.key_state[SDL_SCANCODE_RIGHT])
+			app.actor.dest_rect.x += app.actor.speed * app.delta_time;
+		else if (app.key_state[SDL_SCANCODE_LEFT])
+			app.actor.dest_rect.x -= app.actor.speed * app.delta_time;
+
+		app.frame_time += app.delta_time;
+
+		if (app.frame_time >= 0.20f) {
+			app.frame_time = 0;
+			app.actor.src_rect.x += app.actor.frame_widht;
+			if (app.actor.src_rect.x >= app.actor.texture_width)
+				app.actor.src_rect.x = 0;
+		}
+
+		
+		SDL_RenderClear(app.renderer);														// Clear the screen
+		SDL_RenderCopy(app.renderer, app.actor.texture, &app.actor.src_rect, &app.actor.dest_rect);		
+		SDL_RenderPresent(app.renderer);													// Trigger the double buffers for multiple rendering
 
 		// 60 fps
-		SDL_Delay(1000 / 60);
+		// SDL_Delay(1000 / FPS);
 	}
 
 
