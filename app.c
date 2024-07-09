@@ -27,8 +27,9 @@ typedef struct {
 } actor_t;
 
 typedef struct {
-	actor_t **actors;
-	int actor_count;
+	actor_t **actors;					// Dynamic array of pointers to actors
+	int actor_count;					// Number of actors in the game
+	SDL_Renderer *renderer;				// Renderer for drawing actors
 } game_t;
 
 // Application state
@@ -114,51 +115,47 @@ bool set_config(config_t *config, int argc, char *argv[]) {
 	return true;
 }
 
-#ifdef DEBUG
-bool load_image(app_t *app, const config_t config, const char *img_file) {
+// Handles movement without delays
+void handle_continuous_input(app_t *app, actor_t *actor, config_t config) {
 
-	// Load image from path
-	app->actor.texture = IMG_LoadTexture(app->renderer, img_file);
-	if (!app->actor.texture) {
-		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load texture into graphics hardware memory: %s\n", SDL_GetError());
-		return false;
+	app->key_state = SDL_GetKeyboardState(NULL);
+
+	if (app->key_state[SDL_SCANCODE_RIGHT]) {
+		actor->dest_rect.x += actor->speed * app->delta_time;
+		// Right boundary
+		if (actor->dest_rect.x + actor->dest_rect.w > (int)config.window_width)
+            actor->dest_rect.x = config.window_width - actor->dest_rect.w;  
 	}
+	else if (app->key_state[SDL_SCANCODE_LEFT]) {
+		actor->dest_rect.x -= actor->speed * app->delta_time;
+		// Left boundary
+		if (actor->dest_rect.x < 0)
+            actor->dest_rect.x = 0; 
+	}
+	else if (app->key_state[SDL_SCANCODE_UP]) {
+		actor->dest_rect.y -= actor->speed * app->delta_time;
+		// Upper boundary
+		if (actor->dest_rect.y < 0)
+            actor->dest_rect.y = 0;
+	}
+	else if (app->key_state[SDL_SCANCODE_DOWN]) {
+		actor->dest_rect.y += actor->speed * app->delta_time;
+		// Bottom boundary
+		if (actor->dest_rect.y + actor->dest_rect.h > (int)config.window_height)
+            actor->dest_rect.y = config.window_height - actor->dest_rect.h;
+	}
+ 
+	app->frame_time += app->delta_time;
 
-	// Load image into graphics hardware memory
-	// app->actor.texture = SDL_CreateTextureFromSurface(app->renderer, app->actor.surface);
-	// if (!app->actor.texture) {
-	// 	SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load image into graphics hardware memory: %s\n", SDL_GetError());
-	// 	return false;
-	// }
-
-	// Clears main memory
-	// SDL_FreeSurface(app->actor.surface);
-
-	// 
-	SDL_QueryTexture(app->actor.texture, NULL, NULL, &app->actor.texture_width, &app->actor.texture_height);
-
-	app->actor.frame_widht = app->actor.texture_width / 4;
-	app->actor.frame_height = app->actor.texture_height / 13;
-
-	// app->actor.rect.w /= 2;
-	// app->actor.rect.h /= 2;
-	app->actor.rect.w = app->actor.frame_widht;
-	app->actor.rect.h = app->actor.frame_height;
-
-	// app->actor.rect.x = (config.window_width - app->actor.rect.w) / 2;
-	// app->actor.rect.y = (config.window_height - app->actor.rect.h) / 2;
-	(void)config; // ==========================================================
-
-	app->actor.rect.x = 0;
-	app->actor.rect.y = 0;
-
-	app->actor.speed = 300.0f;
-
-	return true;
+	if (app->frame_time >= 0.20f) {
+		app->frame_time = 0;
+		actor->src_rect.x += actor->frame_widht;
+		if (actor->src_rect.x >= actor->texture_width)
+			actor->src_rect.x = 0;
+	}
 }
-#endif
 
-void handle_input(app_t *app, SDL_Rect *dest_rect, const float delta_time) {
+void handle_input(app_t *app) {
 	SDL_Event event;
 
 	while(SDL_PollEvent(&event)) {
@@ -184,46 +181,6 @@ void handle_input(app_t *app, SDL_Rect *dest_rect, const float delta_time) {
 				}
 				return;
 
-			case SDLK_w:
-			case SDLK_UP:
-				dest_rect->y -= app->actor.speed * delta_time;
-				// Upper boundary
-				if (dest_rect->y < 0) {
-					dest_rect->y = 0;
-			 		break;
-				}
-				break;
-
-			case SDLK_s:
-			case SDLK_DOWN:
-				dest_rect->y += app->actor.speed * delta_time;
-			    // Bottom boundary
-				if (dest_rect->y + dest_rect->h > 1080) {
-					dest_rect->y = 1080 - dest_rect->h;
-					break;
-				}
-				break;
-
-			case SDLK_a:
-			case SDLK_LEFT:
-				dest_rect->x -= app->actor.speed * delta_time;
-				// Left boundary
-			    if (dest_rect->x < 0) {
-			    	dest_rect->x = 0;
-			    	break;
-			    }
-				break;
-
-			case SDLK_d:
-			case SDLK_RIGHT:
-                dest_rect->x += app->actor.speed * delta_time;
-    			// Right boundary
-                if (dest_rect->x + dest_rect->w > 1920) {
-                    dest_rect->x = 1920 - dest_rect->w;  
-                    break;
-                }
-				break;
-
 			default:
 				break;
 			}
@@ -236,9 +193,47 @@ void handle_input(app_t *app, SDL_Rect *dest_rect, const float delta_time) {
 	}
 }
 
-void handle_continuous_input(void) {
-	return;
+bool load_actor(game_t *game, actor_t *actor, config_t config, const char *actor_src) {
+	// load and initialize actor
+	actor->texture = IMG_LoadTexture(game->renderer, actor_src);
+	if (!actor->texture) {
+		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load actor texture into graphics hardware memory: %s\n", SDL_GetError());
+		return false;
+	}
+
+	SDL_Log("Loading actor texture into graphics memory\n");
+	SDL_QueryTexture(actor->texture, NULL, NULL, &actor->texture_width, &actor->texture_height);
+
+	actor->frame_widht = actor->texture_width / 4;
+	actor->frame_height = actor->texture_height / 13;
+	
+
+	// For Animation
+	actor->src_rect.x = actor->src_rect.y = 0;
+	actor->src_rect.w = actor->frame_widht;
+	actor->src_rect.h = actor->frame_height;
+
+	// Size + position
+	actor->dest_rect.w = actor->frame_widht * 5;
+	actor->dest_rect.h = actor->frame_height * 5;
+	actor->dest_rect.x = (config.window_width - actor->dest_rect.w) / 2;
+	actor->dest_rect.y = (config.window_height - actor->dest_rect.h) / 2;
+	actor->speed = 500.0f;
+
+	return true;
 }
+
+bool add_actor(game_t *game, config_t config, const char *actor_src) {
+
+	actor_t actor = {0};
+	if (!load_actor(game, &actor, config, actor_src)) return false;
+
+	game->actors = realloc(game->actors, sizeof(actor_t *) * (game->actor_count + 1));
+	game->actors[game->actor_count++] = &actor;
+
+	return true;
+}
+
 
 
 void cleanup(app_t *app) {
@@ -263,33 +258,16 @@ int main(int argc, char *argv[]) {
 	app_t app = {0};
 	if (!init_app(&app, config)) exit(EXIT_FAILURE);
 
-	// if (!load_image(&app, config, "player/CAT_ORANGE.png")) exit(EXIT_FAILURE);
+	// Initialize game
+	game_t game = {0};
+	app.game = game;
+	game.actor_count = 0;
 
 
-	app.actor.texture = IMG_LoadTexture(app.renderer, "player/CAT_GRAY.png");
-	if (!app.actor.texture) {
-		SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not load texture into graphics hardware memory: %s\n", SDL_GetError());
-		exit(EXIT_FAILURE);
-	}
+	// actor_t actor = {0};
+	// if (!load_actor(&app, &actor, config, "player/CAT_GRAY.png")) exit(EXIT_FAILURE);
 
-	SDL_QueryTexture(app.actor.texture, NULL, NULL, &app.actor.texture_width, &app.actor.texture_height);
-
-	app.actor.frame_widht = app.actor.texture_width / 4;
-	app.actor.frame_height = app.actor.texture_height / 13;
-	
-
-	// For Animation
-	app.actor.src_rect.x = app.actor.src_rect.y = 0;
-	app.actor.src_rect.w = app.actor.frame_widht;
-	app.actor.src_rect.h = app.actor.frame_height;
-
-	// Size + position
-	// SDL_Rect dest_rect;
-	app.actor.dest_rect.w = app.actor.frame_widht * 5;
-	app.actor.dest_rect.h = app.actor.frame_height * 5;
-	app.actor.dest_rect.x = (config.window_width - app.actor.dest_rect.w) / 2;
-	app.actor.dest_rect.y = (config.window_height - app.actor.dest_rect.h) / 2;
-	app.actor.speed = 500.0f;
+	if (!add_actor(&game, config, "player/CAT_GRAY.png")) exit(EXIT_FAILURE);
 
 	// Game Loop
 	while (app.state != QUIT) {
@@ -299,28 +277,15 @@ int main(int argc, char *argv[]) {
 		app.delta_time = (app.current_time - app.prev_time) / 1000.0f;  // Miliseconds passed
 		
 		// Handle input
-		handle_input(&app, &app.actor.dest_rect, app.delta_time);
+		handle_input(&app);
 
 		if (app.state == PAUSED) continue;
 
-		app.key_state = SDL_GetKeyboardState(NULL);
-		if (app.key_state[SDL_SCANCODE_RIGHT])
-			app.actor.dest_rect.x += app.actor.speed * app.delta_time;
-		else if (app.key_state[SDL_SCANCODE_LEFT])
-			app.actor.dest_rect.x -= app.actor.speed * app.delta_time;
-
-		app.frame_time += app.delta_time;
-
-		if (app.frame_time >= 0.20f) {
-			app.frame_time = 0;
-			app.actor.src_rect.x += app.actor.frame_widht;
-			if (app.actor.src_rect.x >= app.actor.texture_width)
-				app.actor.src_rect.x = 0;
-		}
+		handle_continuous_input(&app, game.actors[0], config);
 
 		
 		SDL_RenderClear(app.renderer);														// Clear the screen
-		SDL_RenderCopy(app.renderer, app.actor.texture, &app.actor.src_rect, &app.actor.dest_rect);		
+		SDL_RenderCopy(app.renderer, game.actors[0]->texture, &game.actors[0]->src_rect, &game.actors[0]->dest_rect);		
 		SDL_RenderPresent(app.renderer);													// Trigger the double buffers for multiple rendering
 
 		// 60 fps
